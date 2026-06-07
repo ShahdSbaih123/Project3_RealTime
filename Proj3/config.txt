@@ -1,0 +1,8 @@
+#Configuration File --- Format: KEY=VALUE(no spaces around '=')
+
+PORT=8080
+MAX_CLIENTS=50
+LATEST_VERSION=5
+UPDATE_FILE=update.bin
+LOG_FILE=server.log
+BUFFER_SIZE=4096
