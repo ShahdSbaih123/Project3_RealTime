@@ -329,7 +329,7 @@ int main(int argc, char *argv[])
 
     accept_loop(g_server_fd);
 
-    //Clean shutdown path (reached via signal handler closing g_server_fd) 
+    //Clean shutdown path 
     log_event("-", 0, "Server shutdown");
     close(g_server_fd);
     if (g_log_fp) fclose(g_log_fp);
