@@ -1,8 +1,11 @@
-#Configuration File --- Format: KEY=VALUE(no spaces around '=')
+#Configuration File --- Format: KEY=VALUE(no spaces around '='
 
 PORT=8080
 MAX_CLIENTS=50
 LATEST_VERSION=5
 UPDATE_FILE=update.bin
 LOG_FILE=server.log
+CLIENT_LOG_FILE=client.log
 BUFFER_SIZE=4096
+SERVER_IP=127.0.0.1
+CLIENT_VERSION=5
