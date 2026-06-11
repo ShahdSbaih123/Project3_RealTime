@@ -12,74 +12,55 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include "config.h"
+#include "logger.h"
+#ifndef NO_OPENGL
+#include "opengl_display.h"
+#endif
 
-//global config 
+/* ── Global state ─────────────────────────────────────────── */
 static ServerConfig g_cfg;
-static FILE            *g_log_fp    = NULL;
-static pthread_mutex_t  g_log_mutex = PTHREAD_MUTEX_INITIALIZER;
-static int             g_client_count = 0;
-static pthread_mutex_t g_count_mutex  = PTHREAD_MUTEX_INITIALIZER;
-static int g_server_fd = -1;
+static int          g_server_fd = -1;
 
-//Per-client argument passed to each spawned thread
+#ifndef NO_OPENGL
+/* argc/argv forwarded to GLUT (set in main before GL thread starts) */
+static int    g_gl_argc;
+static char **g_gl_argv;
+#endif
+
+/* ── Per-client thread argument ───────────────────────────── */
 typedef struct {
     int  client_fd;
     char client_ip[INET_ADDRSTRLEN];
     int  client_port;
 } ClientArg;
 
-//logging
-static void log_event(const char *ip, int port, const char *event)
-{
-    time_t     now = time(NULL);
-    struct tm *tm  = localtime(&now);
-    char ts[32];
-    strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm);
-
-    pthread_t tid = pthread_self();
-
-    pthread_mutex_lock(&g_log_mutex);
-    const char *fmt = "[%s] TID=%-10lu  %-15s:%5d  %s\n";
-    printf(fmt, ts, (unsigned long)tid, ip ? ip : "-", port, event);
-    if (g_log_fp) {
-        fprintf(g_log_fp, fmt, ts, (unsigned long)tid,
-                ip ? ip : "-", port, event);
-        fflush(g_log_fp);
-    }
-    pthread_mutex_unlock(&g_log_mutex);
-}
-
+/* ── Signal handler ───────────────────────────────────────── */
 static void handle_signal(int sig)
 {
     const char *msg = "\n[SERVER] Shutdown signal received. Closing...\n";
     write(STDOUT_FILENO, msg, strlen(msg));
-
-    //Close server socket 
-    if (g_server_fd != -1)
-        close(g_server_fd);
-
-    //Close log file cleanly
-    if (g_log_fp)
-        fclose(g_log_fp);
-
-    _exit(0);   //safe to call from signal handler 
+    if (g_server_fd != -1) close(g_server_fd);
+    logger_close();
+    _exit(0);
     (void)sig;
 }
 
+/* ── write_all helper ─────────────────────────────────────── */
 static int write_all(int fd, const char *buf, size_t len)
 {
     size_t total = 0;
     while (total < len) {
         ssize_t w = write(fd, buf + total, len - total);
         if (w < 0) {
-            if (errno == EINTR) continue;  
-            return -1;                
+            if (errno == EINTR) continue;
+            return -1;
         }
         total += (size_t)w;
     }
     return 0;
 }
-//Send the update file to a connected client fd            
+
+/* ── Send update file to client ───────────────────────────── */
 static int send_update_file(int fd, const char *ip, int port)
 {
     FILE *fp = fopen(g_cfg.update_file, "rb");
@@ -97,7 +78,6 @@ static int send_update_file(int fd, const char *ip, int port)
     }
     long file_size = (long)st.st_size;
 
-    //Send size header so the client knows when the transfer ends
     dprintf(fd, "SIZE:%ld\n", file_size);
 
     char *buf = malloc(g_cfg.buffer_size);
@@ -109,7 +89,7 @@ static int send_update_file(int fd, const char *ip, int port)
 
     long   sent = 0;
     size_t n;
-    while ((n = fread(buf, 1, g_cfg.buffer_size, fp)) > 0) {
+    while ((n = fread(buf, 1, (size_t)g_cfg.buffer_size, fp)) > 0) {
         if (write_all(fd, buf, n) != 0) {
             log_event(ip, port, "ERROR: write failed during file transfer");
             free(buf);
@@ -123,13 +103,13 @@ static int send_update_file(int fd, const char *ip, int port)
     fclose(fp);
 
     char msg[128];
-    snprintf(msg, sizeof(msg), "Transfer complete: %ld / %ld bytes sent",
-             sent, file_size);
+    snprintf(msg, sizeof(msg),
+             "Transfer complete: %ld / %ld bytes sent", sent, file_size);
     log_event(ip, port, msg);
     return 0;
 }
 
-//Client handler - runs in its own detached thread                   
+/* ── Per-client handler thread ────────────────────────────── */
 static void *handle_client(void *arg)
 {
     ClientArg *ca   = (ClientArg *)arg;
@@ -142,7 +122,7 @@ static void *handle_client(void *arg)
 
     log_event(ip, port, "Connected");
 
-    //Read one line
+    /* read one VERSION:<n>\n line */
     char    line[256] = {0};
     ssize_t r         = 0;
     int     total     = 0;
@@ -157,9 +137,7 @@ static void *handle_client(void *arg)
     if (r <= 0 || total == 0) {
         log_event(ip, port, "ERROR: no data received — closing connection");
         close(fd);
-        pthread_mutex_lock(&g_count_mutex);
-        g_client_count--;
-        pthread_mutex_unlock(&g_count_mutex);
+        logger_update_client_count(-1);
         return NULL;
     }
 
@@ -170,12 +148,10 @@ static void *handle_client(void *arg)
         log_event(ip, port, "ERROR: malformed request (expected VERSION:<n>)");
         dprintf(fd, "ERROR: invalid request format\n");
         close(fd);
-        //decrement counter on early exit 
-        pthread_mutex_lock(&g_count_mutex);
-        g_client_count--;
-        pthread_mutex_unlock(&g_count_mutex);
+        logger_update_client_count(-1);
         return NULL;
     }
+
     char detail[128];
     snprintf(detail, sizeof(detail),
              "Client version=%d  server latest=%d",
@@ -184,7 +160,7 @@ static void *handle_client(void *arg)
 
     if (client_ver < g_cfg.latest_version) {
         log_event(ip, port, "Decision: UPDATE_AVAILABLE — sending file");
-        dprintf(fd, "UPDATE_AVAILABLE\n");          /* FIX: was UPDATE_REQUIRED */
+        dprintf(fd, "UPDATE_AVAILABLE\n");
         if (send_update_file(fd, ip, port) != 0)
             log_event(ip, port, "ERROR: file transfer failed");
     } else {
@@ -194,13 +170,11 @@ static void *handle_client(void *arg)
 
     close(fd);
     log_event(ip, port, "Disconnected");
-    pthread_mutex_lock(&g_count_mutex);
-    g_client_count--;
-    pthread_mutex_unlock(&g_count_mutex);
-
+    logger_update_client_count(-1);
     return NULL;
 }
-//Server socket: create->bind->listen                   
+
+/* ── Create + bind + listen ───────────────────────────────── */
 static int create_server_socket(int port)
 {
     int sfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -223,7 +197,7 @@ static int create_server_socket(int port)
     return sfd;
 }
 
-//Accept loop - blocks until stopped
+/* ── Accept loop ──────────────────────────────────────────── */
 static void accept_loop(int server_fd)
 {
     char startup[64];
@@ -238,7 +212,6 @@ static void accept_loop(int server_fd)
                          (struct sockaddr *)&client_addr, &addr_len);
         if (cfd < 0) {
             if (errno == EINTR) continue;
-            /* FIX 2: accept() returns error after signal closes server_fd */
             if (errno == EBADF || errno == EINVAL) {
                 log_event("-", 0, "Server socket closed — exiting accept loop");
                 break;
@@ -247,24 +220,20 @@ static void accept_loop(int server_fd)
             continue;
         }
 
-        pthread_mutex_lock(&g_count_mutex);
-        if (g_client_count >= g_cfg.max_clients) {
-            pthread_mutex_unlock(&g_count_mutex);
+        /* check capacity using logger's counter */
+        if (logger_get_client_count() >= g_cfg.max_clients) {
             log_event("-", 0, "REJECTED: max clients reached");
             dprintf(cfd, "ERROR: server busy, max clients reached\n");
             close(cfd);
             continue;
         }
-        g_client_count++;
-        pthread_mutex_unlock(&g_count_mutex);
+        logger_update_client_count(+1);
 
         ClientArg *ca = malloc(sizeof(ClientArg));
         if (!ca) {
             close(cfd);
             log_event("-", 0, "ERROR: malloc failed for ClientArg");
-            pthread_mutex_lock(&g_count_mutex);
-            g_client_count--;
-            pthread_mutex_unlock(&g_count_mutex);
+            logger_update_client_count(-1);
             continue;
         }
         ca->client_fd   = cfd;
@@ -288,18 +257,33 @@ static void accept_loop(int server_fd)
                       "ERROR: failed to spawn client thread");
             free(ca);
             close(cfd);
-            pthread_mutex_lock(&g_count_mutex);
-            g_client_count--;
-            pthread_mutex_unlock(&g_count_mutex);
+            logger_update_client_count(-1);
         }
         pthread_attr_destroy(&attr);
     }
 }
 
-//main                                                                
-//Usage: ./server [config_file]   
+#ifndef NO_OPENGL
+/* ── OpenGL thread entry ──────────────────────────────────── */
+static void *gl_thread_func(void *arg)
+{
+    (void)arg;
+    opengl_server_init(&g_gl_argc, g_gl_argv);
+    opengl_server_run();   /* blocks in GLUT main loop */
+    return NULL;
+}
+#endif
+
+/* ── main ─────────────────────────────────────────────────── */
+/*  Usage: ./server [config_file]                              */
 int main(int argc, char *argv[])
 {
+#ifndef NO_OPENGL
+    /* save for GLUT */
+    g_gl_argc = argc;
+    g_gl_argv = argv;
+#endif
+
     const char *cfg_file = (argc > 1) ? argv[1] : "config.txt";
 
     if (load_config(cfg_file, &g_cfg) != 0) {
@@ -308,30 +292,35 @@ int main(int argc, char *argv[])
     }
     print_config(&g_cfg);
 
-    /* FIX 2: Register signal handlers for graceful shutdown */
     signal(SIGINT,  handle_signal);
     signal(SIGTERM, handle_signal);
 
-    g_log_fp = fopen(g_cfg.log_file, "a");
-    if (!g_log_fp)
-        fprintf(stderr,
-                "Warning: cannot open log file '%s' — logging to stdout only\n",
-                g_cfg.log_file);
-
+    /* initialise shared logger */
+    logger_init(g_cfg.log_file);
     log_event("-", 0, "Server startup");
+
+#ifndef NO_OPENGL
+    /* spin up OpenGL monitor in its own thread */
+    pthread_t gl_tid;
+    if (pthread_create(&gl_tid, NULL, gl_thread_func, NULL) != 0) {
+        perror("pthread_create (GL thread)");
+        fprintf(stderr, "Warning: OpenGL monitor disabled\n");
+    } else {
+        pthread_detach(gl_tid);
+    }
+#endif
 
     g_server_fd = create_server_socket(g_cfg.port);
     if (g_server_fd < 0) {
         log_event("-", 0, "FATAL: could not create server socket");
-        if (g_log_fp) fclose(g_log_fp);
+        logger_close();
         return 1;
     }
 
     accept_loop(g_server_fd);
 
-    //Clean shutdown path 
     log_event("-", 0, "Server shutdown");
     close(g_server_fd);
-    if (g_log_fp) fclose(g_log_fp);
+    logger_close();
     return 0;
 }
