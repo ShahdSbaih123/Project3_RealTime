@@ -1,8 +1,0 @@
-[2026-06-11 09:32:32] CLIENT  Client startup
-[2026-06-11 09:32:32] CLIENT  Current version: 5
-[2026-06-11 09:32:32] CLIENT  Connected to server
-[2026-06-11 09:32:32] CLIENT  Sent VERSION:5
-[2026-06-11 09:32:32] CLIENT  Server response: UP_TO_DATE
-[2026-06-11 09:32:32] CLIENT  Software is up to date — no update needed
-[2026-06-11 09:32:32] CLIENT  Connection closed
-[2026-06-11 09:32:32] CLIENT  Client shutdown

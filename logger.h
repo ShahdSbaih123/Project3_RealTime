@@ -2,6 +2,8 @@
 #define LOGGER_H
 
 #include <stdio.h>
+#include <netinet/in.h>   
+
 
 /* ── Initialise / teardown ─────────────────────────────────── */
 
@@ -51,5 +53,11 @@ int  logger_get_client_count(void);
 
 /** Update the live-client counter (call with +1 on connect, -1 on disconnect). */
 void logger_update_client_count(int delta);
+
+void logger_increment_total_connections(void);
+int  logger_get_total_connections(void);
+void logger_set_last_client(const char *ip, const char *action);
+void logger_get_last_client(char *ip_buf, int ip_len,
+                             char *action_buf, int action_len);
 
 #endif /* LOGGER_H */

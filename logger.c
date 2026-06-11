@@ -121,3 +121,43 @@ void logger_update_client_count(int delta)
     s_client_count += delta;
     pthread_mutex_unlock(&s_count_mutex);
 }
+
+static int  s_total_connections = 0;
+static char s_last_client_ip[INET_ADDRSTRLEN] = "-";
+static char s_last_client_action[128]         = "-";
+
+void logger_increment_total_connections(void)
+{
+    pthread_mutex_lock(&s_count_mutex);
+    s_total_connections++;
+    pthread_mutex_unlock(&s_count_mutex);
+}
+
+int logger_get_total_connections(void)
+{
+    pthread_mutex_lock(&s_count_mutex);
+    int t = s_total_connections;
+    pthread_mutex_unlock(&s_count_mutex);
+    return t;
+}
+
+void logger_set_last_client(const char *ip, const char *action)
+{
+    pthread_mutex_lock(&s_count_mutex);
+    if (ip)     { strncpy(s_last_client_ip, ip, INET_ADDRSTRLEN - 1);
+                  s_last_client_ip[INET_ADDRSTRLEN - 1] = '\0'; }
+    if (action) { strncpy(s_last_client_action, action, 127);
+                  s_last_client_action[127] = '\0'; }
+    pthread_mutex_unlock(&s_count_mutex);
+}
+
+void logger_get_last_client(char *ip_buf,     int ip_len,
+                             char *action_buf, int action_len)
+{
+    pthread_mutex_lock(&s_count_mutex);
+    strncpy(ip_buf,     s_last_client_ip,     ip_len     - 1);
+    strncpy(action_buf, s_last_client_action, action_len - 1);
+    ip_buf[ip_len - 1]         = '\0';
+    action_buf[action_len - 1] = '\0';
+    pthread_mutex_unlock(&s_count_mutex);
+}

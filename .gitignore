@@ -1,0 +1,14 @@
+# Compiled binaries
+server
+client
+server_test
+client_test
+
+# Object files
+*.o
+
+# Log files
+*.log
+
+# Downloaded update files
+update_v*.bin

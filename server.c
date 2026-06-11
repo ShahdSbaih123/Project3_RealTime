@@ -121,6 +121,8 @@ static void *handle_client(void *arg)
     free(ca);
 
     log_event(ip, port, "Connected");
+    logger_increment_total_connections();
+    logger_set_last_client(ip, "Connected");
 
     /* read one VERSION:<n>\n line */
     char    line[256] = {0};
@@ -161,11 +163,14 @@ static void *handle_client(void *arg)
     if (client_ver < g_cfg.latest_version) {
         log_event(ip, port, "Decision: UPDATE_AVAILABLE — sending file");
         dprintf(fd, "UPDATE_AVAILABLE\n");
+        logger_set_last_client(ip, "Downloading update");
+
         if (send_update_file(fd, ip, port) != 0)
             log_event(ip, port, "ERROR: file transfer failed");
     } else {
         log_event(ip, port, "Decision: UP_TO_DATE");
         dprintf(fd, "UP_TO_DATE\n");
+        logger_set_last_client(ip, "Already up to date");
     }
 
     close(fd);

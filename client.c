@@ -10,14 +10,12 @@
 #include <arpa/inet.h>
 #include "config.h"
 #include "logger.h"
-#include "opengl_display.h"
 
 /* ── Global config ────────────────────────────────────────── */
 static ClientConfig g_cfg;
 
 /* argc/argv saved for GLUT */
-static int    g_gl_argc;
-static char **g_gl_argv;
+
 
 /* ── getCurrentVersion ────────────────────────────────────── */
 int getCurrentVersion(void)
@@ -235,21 +233,11 @@ void CheckForUpdate(void)
     log_client("Connection closed");
 }
 
-/* ── OpenGL thread entry ──────────────────────────────────── */
-static void *gl_thread_func(void *arg)
-{
-    (void)arg;
-    opengl_client_init(&g_gl_argc, g_gl_argv);
-    opengl_client_run();
-    return NULL;
-}
+
 
 /* ── main ─────────────────────────────────────────────────── */
 int main(int argc, char *argv[])
 {
-    g_gl_argc = argc;
-    g_gl_argv = argv;
-
     const char *cfg_file = (argc > 1) ? argv[1] : "config.txt";
 
     if (load_client_config(cfg_file, &g_cfg) != 0) {
@@ -261,16 +249,6 @@ int main(int argc, char *argv[])
     logger_init(g_cfg.log_file);
     log_client("Client startup");
 
-    /* spin up OpenGL progress window in its own thread */
-    pthread_t gl_tid;
-    if (pthread_create(&gl_tid, NULL, gl_thread_func, NULL) != 0) {
-        perror("pthread_create (GL thread)");
-        fprintf(stderr, "Warning: OpenGL progress display disabled\n");
-    } else {
-        pthread_detach(gl_tid);
-        /* small delay so GLUT window can open before work begins */
-        usleep(300000);
-    }
 
     CheckForUpdate();
 
